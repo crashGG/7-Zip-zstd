@@ -12,7 +12,7 @@ jobs:
     strategy:
       matrix:
         darkmode: [true, false]
-        compiler: [gcc, clang] # 复用源码支持的 gcc/clang 交叉编译
+        compiler: [gcc, clang]
     steps:
       - name: 1. 检出源码（包含子模块 DarkMode/lib）
         uses: actions/checkout@v6
@@ -22,27 +22,33 @@ jobs:
       - name: 2. 安装依赖（MinGW-w64 工具链 + 辅助工具）
         run: |
           sudo apt update && sudo apt upgrade -y
-          # 安装 MinGW-w64 交叉编译工具链（x86_64 目标）
           sudo apt install -y mingw-w64 make wine64 unzip tclsh
-          # 验证工具链是否安装成功
           x86_64-w64-mingw32-gcc --version
           x86_64-w64-mingw32-g++ --version
 
-      - name: 3. 下载并安装 UASM 汇编器（必需，用于编译 Asm 目录优化代码）
+      - name: 3. 下载并安装 UASM 汇编器（修正：使用合法选项验证）
         run: |
           # 下载 Linux 64 位 UASM（对应源码 Asm 目录的 .asm 文件编译）
           wget -q "https://github.com/Terraspace/UASM/releases/download/v2.57r/uasm257_linux64.zip"
           unzip -q uasm257_linux64.zip uasm
           # 安装到系统路径，赋予执行权限
           sudo install -m 755 uasm /usr/bin
-          # 验证 UASM 安装
-          uasm --version
+          # 修正：使用 UASM 合法选项验证安装（-h 查看帮助，重定向屏蔽输出，仅验证退出码）
+          # 方案 1：严谨验证（推荐）
+          if uasm -h > /dev/null 2>&1; then
+            echo "UASM 安装成功，版本信息如下："
+            # 直接执行 uasm（无参数），提取版本信息（忽略 A2104 错误，仅保留版本输出）
+            uasm 2>&1 | head -n 1
+          else
+            echo "UASM 安装失败"
+            exit 1
+          fi
+          # 方案 2：若无需详细验证，可替换为以下单行（直接跳过错误，仅确认存在）
+          # command -v uasm > /dev/null 2>&1 && echo "UASM 安装成功" || (echo "UASM 安装失败" && exit 1)
 
       - name: 4. 配置交叉编译环境变量（核心，适配源码 build-lx.sh 脚本）
         run: |
-          # 定义 MinGW-w64 工具链前缀
           echo "TOOLCHAIN_PREFIX=x86_64-w64-mingw32" >> $GITHUB_ENV
-          # 选择交叉编译编译器（gcc/clang）
           if [ "${{ matrix.compiler }}" = "gcc" ]; then
             echo "CC=x86_64-w64-mingw32-gcc" >> $GITHUB_ENV
             echo "CXX=x86_64-w64-mingw32-g++" >> $GITHUB_ENV
@@ -50,28 +56,21 @@ jobs:
             echo "CC=x86_64-w64-mingw32-clang" >> $GITHUB_ENV
             echo "CXX=x86_64-w64-mingw32-clang++" >> $GITHUB_ENV
           fi
-          # 定义输出目录
           echo "OUTDIR=$PWD/CPP/build-win64-${{ matrix.compiler }}-darkmode-${{ matrix.darkmode }}" >> $GITHUB_ENV
-          # 暗模式配置（对应 DarkMode 目录）
           echo "ZIP7_DARKMODE=$(if [ "${{ matrix.darkmode }}" = "true" ]; then echo 1; else echo 0; fi)" >> $GITHUB_ENV
-          # 编译宏：指定 Windows 目标平台、静态链接、兼容参数
           echo "CFLAGS=-static -O2 -DWIN32 -D_WINDOWS -DZIP7_DARKMODE=$ZIP7_DARKMODE" >> $GITHUB_ENV
           echo "CXXFLAGS=-static -O2 -DWIN32 -D_WINDOWS -DZIP7_DARKMODE=$ZIP7_DARKMODE -std=c++17" >> $GITHUB_ENV
           echo "LDFLAGS=-static -lkernel32 -luser32 -lgdi32 -lpthread" >> $GITHUB_ENV
 
       - name: 5. 进入 CPP 目录，执行原生构建脚本 build-lx.sh（核心修正）
         run: |
-          # 进入 build-lx.sh 所在目录（CPP 目录，对应源码结构）
           cd ${{ github.workspace }}/CPP
-          # 验证 build-lx.sh 是否存在（避免路径错误）
           if [ ! -f "./build-lx.sh" ]; then
             echo "错误：未找到原生构建脚本 build-lx.sh"
             ls -l
             exit 1
           fi
-          # 赋予构建脚本执行权限
           chmod +x ./build-lx.sh
-          # 执行交叉编译（传递环境变量，复用源码构建逻辑）
           CC="$ENV{CC}" \
           CXX="$ENV{CXX}" \
           OUTDIR="$ENV{OUTDIR}" \
@@ -83,11 +82,9 @@ jobs:
 
       - name: 6. 验证编译产物（使用 Wine64 运行 Windows 可执行文件）
         run: |
-          # 查找生成的 7z.exe（命令行工具，稳定性更高）
           EXE_FILE=$(find ${{ env.OUTDIR }} -name "7z.exe" -type f | head -n 1)
           if [ -f "$EXE_FILE" ]; then
             echo "验证编译产物：$EXE_FILE"
-            # 使用 Wine64 运行，查看版本信息
             wine64 "$EXE_FILE" --version
           else
             echo "错误：未找到生成的 7z.exe 可执行文件"
