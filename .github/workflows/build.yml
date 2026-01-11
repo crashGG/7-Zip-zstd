@@ -37,7 +37,7 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Windows 构建：仅保留 x64 架构，修复 Clang 工具集配置问题
+  # Windows 构建：使用 clang-cl.exe 兼容 MSVC 参数，保留汇编优化
   windows-x64-clang:
     runs-on: windows-latest
     strategy:
@@ -49,11 +49,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # 使用 Chocolatey 安装兼容 Windows 的 Clang 16.0.6（稳定版）
-      - name: Install Clang (x64) via Chocolatey
+      # 安装 LLVM（包含 clang-cl.exe，兼容 MSVC 参数）
+      - name: Install LLVM/Clang (x64) via Chocolatey
         shell: powershell
         run: |
-          # 确保 Chocolatey 已安装（若未预装则自动安装）
+          # 确保 Chocolatey 已安装
           if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
             Write-Host "Installing Chocolatey package manager"
             Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -61,24 +61,23 @@ jobs:
             Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
           }
 
-          # 静默安装 Clang 16.0.6（兼容 Windows x64，自动配置 PATH）
-          Write-Host "Installing Clang 16.0.6 via Chocolatey"
+          # 静默安装 LLVM 16.0.6（包含 clang-cl.exe）
+          Write-Host "Installing LLVM 16.0.6 via Chocolatey"
           choco install llvm --version=16.0.6 -y --no-progress
 
-          # 验证 Clang 安装成功
-          Write-Host "Verifying Clang installation"
-          clang --version
-          clang++ --version
+          # 验证 clang-cl.exe 安装成功
+          Write-Host "Verifying clang-cl installation"
+          clang-cl --version
           if ($LASTEXITCODE -ne 0) {
-            Write-Error "Clang verification failed after Chocolatey installation"
+            Write-Error "clang-cl verification failed after Chocolatey installation"
             exit 1
           }
 
-      # 保留 msbuild 路径配置（确保构建脚本正常执行）
+      # 保留 msbuild 路径配置
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@v2
 
-      # 修复：移除 toolset: clang 无效参数，仅配置 x64 架构（满足 Windows 构建环境即可）
+      # 仅配置 x64 架构环境
       - name: Enable Developer Command Prompt (x64)
         uses: ilammy/msvc-dev-cmd@v1.13.0
         with:
@@ -101,8 +100,8 @@ jobs:
             )
           )
 
-      # 编译 x64（使用 Chocolatey 安装的独立 Clang，保留汇编优化）
-      - name: Compiling x64 with Clang
+      # 编译 x64：使用 clang-cl.exe 兼容 MSVC 参数，保留汇编优化
+      - name: Compiling x64 with clang-cl (MSVC compatible)
         shell: cmd
         run: |
           set WDIR=%cd%
@@ -117,9 +116,11 @@ jobs:
             set OUTDIR=%OUTDIR%-ndm
             set ZIP7_DARKMODE=0
           )
-          # 指定 Chocolatey 安装的独立 Clang 为默认编译器（全局可调用）
-          set CC=clang.exe
-          set CXX=clang++.exe
+          :: 核心修改：使用 clang-cl.exe 替代 clang.exe，兼容 MSVC 专属参数
+          set CC=clang-cl.exe
+          set CXX=clang-cl.exe
+          :: 额外配置：确保 clang-cl 识别 MSVC 环境变量（头文件、库文件路径）
+          set LLVM_SYMBOLIZER_PATH=%ProgramFiles%\LLVM\bin\llvm-symbolizer.exe
           set LFLAGS=/SUBSYSTEM:WINDOWS,%SUBSYS%
           set ERRFILE=
           set STOP_ON_ERROR=1
@@ -128,18 +129,18 @@ jobs:
           echo "Working Dir: %WDIR%"
           echo "Platform:    %PLATFORM%"
           echo "SUBSYS:      %SUBSYS%"
-          echo "Compiler:    Clang 16.0.6 (standalone, installed via Chocolatey)"
+          echo "Compiler:    clang-cl.exe (MSVC compatible, LLVM 16.0.6)"
 
           @echo off
 
           call CPP\build-it.cmd -no-init
           IF %errorlevel% NEQ 0 EXIT 1
 
-          # 复制发布脚本供后续打包使用
+          :: 复制发布脚本供后续打包使用
           copy %WDIR%\.github\workflows\do-release.cmd %WDIR%\build\do-release.cmd
 
       # 测试 x64 产物
-      - name: Test x64 Clang Binary
+      - name: Test x64 clang-cl Binary
         shell: cmd
         run: |
           set PLATFORM=${{matrix.platform}}
@@ -149,7 +150,7 @@ jobs:
           tclsh tests\7z-test.tcl -verbose tpsem
 
       # 上传 x64 构建产物
-      - name: Upload x64 Clang Build Artifact
+      - name: Upload x64 clang-cl Build Artifact
         uses: actions/upload-artifact@v6
         with:
           path: ${{ github.workspace }}\build\**\*
@@ -178,7 +179,7 @@ jobs:
 
     - uses: actions/upload-artifact@v6
       with:
-        name: 7-Zip ZS Release binaries (x64 Clang 16.0.6)
+        name: 7-Zip ZS Release binaries (x64 clang-cl)
         path: |
           artifact\*.exe
           artifact\*.7z
