@@ -1,11 +1,11 @@
-# 顶层配置：工作流名称（必需，可自定义）
+# 顶层配置：工作流名称
 name: Build binaries
-# 顶层配置：触发条件（必需，定义工作流何时运行）
+# 顶层配置：触发条件
 on: [push, pull_request]
 
-# 顶层配置：所有构建任务的容器（必需，不可缺失）
+# 顶层配置：所有构建任务容器
 jobs:
-  # Linux x64 构建任务（保留你原有的逻辑）
+  # Linux 构建任务（精简：仅保留 x64，移除 arm64 全部内容）
   linux-x64:
     runs-on: ubuntu-latest
     steps:
@@ -40,67 +40,26 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Linux arm64 构建任务（保留你原有的逻辑）
-  linux-arm64:
-    runs-on: ubuntu-24.04-arm
-    steps:
-    - uses: actions/checkout@v6
-    - name: Build via clang
-      run: |
-        cd ${{ github.workspace }}/CPP
-        CC="clang" CXX="clang++" OUTDIR="$PWD/build-clang" ./build-lx.sh
-    - name: Build via gcc
-      run: |
-        cd ${{ github.workspace }}/CPP
-        CC="gcc" CXX="g++" OUTDIR="$PWD/build-gcc" ./build-lx.sh
-    - name: Test with clang binary
-      run: |
-        Z7_PATH="CPP/build-clang/7z" tclsh tests/7z-test.tcl -verbose tpsem
-    - name: Test with gcc binary
-      run: |
-        Z7_PATH="CPP/build-gcc/7z" tclsh tests/7z-test.tcl -verbose tpsem
-    - name: Upload Build Artifacts (gcc)
-      uses: actions/upload-artifact@v6
-      with:
-        path: ${{ github.workspace }}/CPP/build-gcc/*
-        name: linux-gcc-arm64
-    - name: Upload Build Artifacts (clang)
-      uses: actions/upload-artifact@v6
-      with:
-        path: ${{ github.workspace }}/CPP/build-clang/*
-        name: linux-clang-arm64
-
-  # Windows GCC 构建任务（已修改为 MinGW GCC，嵌套在 jobs 之下）
+  # Windows 构建任务（保持已精简的 x64 架构，无额外修改）
   windows:
     runs-on: windows-latest
     strategy:
       matrix:
-        arch: [ x86, x64, arm64 ]  # GCC 对应架构命名，替换原 MSVC 架构
         darkmode: [darkmode, '']
-        include:
-          - arch: x86
-            subsys: "5.01"
-            platform: "x86"
-            target: "i686-w64-mingw32"
-          - arch: x64
-            subsys: "5.02"
-            platform: "x64"
-            target: "x86_64-w64-mingw32"
-          - arch: arm64
-            subsys: "6.02"
-            platform: "arm64"
-            target: "aarch64-w64-mingw32"
+        arch: [x64]
+        subsys: ["5.02"]
+        platform: ["x64"]
+        target: ["x86_64-w64-mingw32"]
     steps:
       - uses: actions/checkout@v6
 
-      # 安装 MinGW GCC 工具链（替换 MSBuild/VC Dev Cmd）
-      - name: Install MinGW GCC (Mingw-w64)
-        uses: egor-tensin/setup-mingw@v2
+      # 安装 MinGW GCC (仅 x64 架构，稳定兼容)
+      - name: Install MinGW GCC (Mingw-w64 x64)
+        uses: egor-tensin/setup-mingw@v3
         with:
-          platform: ${{ matrix.arch }}
-          version: latest
+          platform: x64
 
-      # 预准备依赖（改为 PowerShell 兼容格式）
+      # 预准备依赖（保留原有逻辑，适配 x64）
       - name: Pre-requirements
         shell: powershell
         run: |
@@ -117,15 +76,36 @@ jobs:
             }
           }
 
-      # GCC 编译（参考 Linux 构建的 CC/CXX 环境变量风格）
-      - name: Compiling ${{ matrix.arch }} with GCC
+      # GCC 编译（仅 x64 架构，精简冗余配置）
+      - name: Compiling x64 with GCC
         shell: powershell
         run: |
-          # 定义基础路径和环境变量
-          $WDIR = $PWD.Path
-          $PLATFORM = "${{ matrix.arch }}"
-          $SUBSYS = "${{ matrix.subsys }}"
+          # 验证 x64 编译器是否存在
           $TARGET = "${{ matrix.target }}"
+          $CC_PATH = "$($TARGET)-gcc"
+          $CXX_PATH = "$($TARGET)-g++"
+          
+          try {
+            & $CC_PATH --version
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "GCC 编译器 $CC_PATH 不存在，安装失败"
+              exit 1
+            }
+            & $CXX_PATH --version
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "G++ 编译器 $CXX_PATH 不存在，安装失败"
+              exit 1
+            }
+          }
+          catch {
+            Write-Error "无法执行编译器 $CC_PATH，MinGW 安装不完整"
+            exit 1
+          }
+
+          # 定义路径和环境变量（仅 x64 适配）
+          $WDIR = $PWD.Path
+          $PLATFORM = "${{ matrix.platform }}"
+          $SUBSYS = "${{ matrix.subsys }}"
           $ROOT = Join-Path $WDIR "CPP/7zip"
           $OUTDIR = Join-Path $WDIR "build/bin-$PLATFORM"
           $DARKMODE = "${{ matrix.darkmode }}"
@@ -139,7 +119,7 @@ jobs:
             $env:ZIP7_DARKMODE = 0
           }
 
-          # 指定 GCC 编译器（针对 Windows 交叉编译目标）
+          # 指定 x64 GCC 编译器
           $env:CC = "$($TARGET)-gcc"
           $env:CXX = "$($TARGET)-g++"
           $env:OUTDIR = $OUTDIR
@@ -172,11 +152,11 @@ jobs:
           $doReleaseDst = Join-Path $WDIR "build/do-release.cmd"
           Copy-Item -Path $doReleaseSrc -Destination $doReleaseDst -Force
 
-      # 测试 GCC 编译产物
-      - name: Test
+      # 测试 x64 编译产物
+      - name: Test x64 binary
         shell: powershell
         run: |
-          $PLATFORM = "${{ matrix.arch }}"
+          $PLATFORM = "${{ matrix.platform }}"
           $DARKMODE = "${{ matrix.darkmode }}"
           $OUTDIR = "build/bin-$PLATFORM"
           if ($DARKMODE -eq "") { $OUTDIR += "-ndm" }
@@ -185,18 +165,18 @@ jobs:
           # 执行测试脚本
           tclsh tests/7z-test.tcl -verbose tpsem
           if ($LASTEXITCODE -ne 0) {
-            Write-Error "Test failed for $PLATFORM ($DARKMODE)"
+            Write-Error "Test failed for x64 ($DARKMODE)"
             exit 1
           }
 
-      # 上传 GCC 构建产物
-      - name: Upload a Build Artifact
+      # 上传 x64 构建产物
+      - name: Upload x64 Build Artifact
         uses: actions/upload-artifact@v6
         with:
           path: ${{ github.workspace }}\build\**\*
-          name: binary-${{ matrix.arch }}-${{ matrix.darkmode }}
+          name: binary-x64-${{ matrix.darkmode }}
 
-  # 发布任务（保留你原有的逻辑，嵌套在 jobs 之下）
+  # 发布任务（仅依赖 Windows x64 构建产物，无冗余）
   do-release:
     runs-on: windows-latest
     needs: windows
@@ -204,7 +184,7 @@ jobs:
     - uses: actions/download-artifact@v7
       with:
         path: artifact
-        pattern: binary-*
+        pattern: binary-x64-*
         merge-multiple: true
 
     - name: Generate binaries for release
@@ -215,11 +195,11 @@ jobs:
 
     - uses: geekyeggo/delete-artifact@v5
       with:
-          name: binary-*
+          name: binary-x64-*
 
     - uses: actions/upload-artifact@v6
       with:
-        name: 7-Zip ZS Release binaries
+        name: 7-Zip ZS Release binaries (x64)
         path: |
           artifact\*.exe
           artifact\*.7z
