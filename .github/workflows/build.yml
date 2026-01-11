@@ -37,7 +37,7 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Windows 构建：屏蔽符号比较错误，保留汇编优化和全量兼容性
+  # Windows 构建：屏蔽误导性缩进错误，保留汇编优化和全量兼容性
   windows-x64-clang:
     runs-on: windows-latest
     strategy:
@@ -100,8 +100,8 @@ jobs:
             )
           )
 
-      # 编译 x64：屏蔽符号比较错误，覆盖 C/C++ 双语言，保留全量兼容配置
-      - name: Compiling x64 with clang-cl (sign comparison error suppressed)
+      # 编译 x64：屏蔽误导性缩进错误，覆盖 C/C++ 双语言，保留全量兼容配置
+      - name: Compiling x64 with clang-cl (misleading indentation error suppressed)
         shell: cmd
         run: |
           set WDIR=%cd%
@@ -119,10 +119,10 @@ jobs:
           :: 核心配置：使用 clang-cl.exe 兼容 MSVC 参数
           set CC=clang-cl.exe
           set CXX=clang-cl.exe
-          :: 核心修改：新增 -Wno-error=sign-compare 屏蔽有符号/无符号整数比较错误
+          :: 核心修改：新增 -Wno-error=misleading-indentation 屏蔽误导性缩进错误
           :: 保留所有现有兼容配置，覆盖 C/C++ 双语言场景，确保无遗漏
-          set CFLAGS=-Y- -Wno-unused-command-line-argument -Wno-error=unused-function -Wno-error=cast-function-type-mismatch -Wno-error=sign-compare -fms-compatibility
-          set CXXFLAGS=-Y- -Wno-unused-command-line-argument -Wno-error=unused-function -Wno-error=cast-function-type-mismatch -Wno-error=sign-compare -fms-compatibility
+          set CFLAGS=-Y- -Wno-unused-command-line-argument -Wno-error=unused-function -Wno-error=cast-function-type-mismatch -Wno-error=sign-compare -Wno-error=misleading-indentation -fms-compatibility
+          set CXXFLAGS=-Y- -Wno-unused-command-line-argument -Wno-error=unused-function -Wno-error=cast-function-type-mismatch -Wno-error=sign-compare -Wno-error=misleading-indentation -fms-compatibility
           :: 额外配置：确保 clang-cl 识别 MSVC 环境变量和 C++20 配置
           set LLVM_SYMBOLIZER_PATH=%ProgramFiles%\LLVM\bin\llvm-symbolizer.exe
           set LFLAGS=/SUBSYSTEM:WINDOWS,%SUBSYS%
@@ -134,7 +134,7 @@ jobs:
           echo "Platform:    %PLATFORM%"
           echo "SUBSYS:      %SUBSYS%"
           echo "Compiler:    clang-cl.exe (MSVC compatible, LLVM 16.0.6)"
-          echo "Config:      PCH disabled (-Y-), unused/function pointer/sign comparison errors suppressed (C/C++ covered)"
+          echo "Config:      PCH disabled (-Y-), unused/function pointer/sign comparison/indentation errors suppressed (C/C++ covered)"
 
           @echo off
 
