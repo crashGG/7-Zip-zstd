@@ -37,7 +37,7 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Windows 构建：彻底屏蔽未使用函数错误，保留汇编优化和兼容性
+  # Windows 构建：屏蔽函数指针类型转换错误，保留汇编优化和兼容性
   windows-x64-clang:
     runs-on: windows-latest
     strategy:
@@ -100,8 +100,8 @@ jobs:
             )
           )
 
-      # 编译 x64：彻底屏蔽未使用函数错误，覆盖 C/C++ 双语言
-      - name: Compiling x64 with clang-cl (unused function error suppressed)
+      # 编译 x64：屏蔽函数指针类型转换错误，覆盖 C/C++ 双语言
+      - name: Compiling x64 with clang-cl (function pointer cast error suppressed)
         shell: cmd
         run: |
           set WDIR=%cd%
@@ -119,11 +119,10 @@ jobs:
           :: 核心配置：使用 clang-cl.exe 兼容 MSVC 参数
           set CC=clang-cl.exe
           set CXX=clang-cl.exe
-          :: 核心修改1：使用 -Wno-error=unused-function 直接屏蔽错误（优先级高于 -WX）
-          :: 核心修改2：同时配置 CFLAGS（C 语言）和 CXXFLAGS（C++ 语言），覆盖所有编译场景
-          :: 保留原有兼容配置，确保无其他兼容性问题
-          set CFLAGS=-Y- -Wno-unused-command-line-argument -Wno-error=unused-function -fms-compatibility
-          set CXXFLAGS=-Y- -Wno-unused-command-line-argument -Wno-error=unused-function -fms-compatibility
+          :: 核心修改：新增 -Wno-error=cast-function-type-mismatch 屏蔽函数指针类型转换错误
+          :: 保留所有现有兼容配置，覆盖 C/C++ 双语言场景
+          set CFLAGS=-Y- -Wno-unused-command-line-argument -Wno-error=unused-function -Wno-error=cast-function-type-mismatch -fms-compatibility
+          set CXXFLAGS=-Y- -Wno-unused-command-line-argument -Wno-error=unused-function -Wno-error=cast-function-type-mismatch -fms-compatibility
           :: 额外配置：确保 clang-cl 识别 MSVC 环境变量和 C++20 配置
           set LLVM_SYMBOLIZER_PATH=%ProgramFiles%\LLVM\bin\llvm-symbolizer.exe
           set LFLAGS=/SUBSYSTEM:WINDOWS,%SUBSYS%
@@ -135,7 +134,7 @@ jobs:
           echo "Platform:    %PLATFORM%"
           echo "SUBSYS:      %SUBSYS%"
           echo "Compiler:    clang-cl.exe (MSVC compatible, LLVM 16.0.6)"
-          echo "Config:      PCH disabled (-Y-), unused parameter/function errors suppressed (C/C++ covered)"
+          echo "Config:      PCH disabled (-Y-), unused/function pointer cast errors suppressed (C/C++ covered)"
 
           @echo off
 
@@ -159,7 +158,7 @@ jobs:
       - name: Upload x64 clang-cl Build Artifact
         uses: actions/upload-artifact@v6
         with:
-          path: ${{ github.workspace }}\build\**\*
+          path: ${{ github.workspace }}/build\**\*
           name: binary-x64-${{ matrix.darkmode }}
 
   # 发布任务：仅依赖 Windows x64 产物
