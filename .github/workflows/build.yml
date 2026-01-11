@@ -2,7 +2,7 @@ name: Build binaries
 on: [push, pull_request]
 
 jobs:
-  # 仅保留 Linux x64 构建（移除 arm64，保留原有双编译器和汇编优化）
+  # 仅保留 Linux x64 构建（保留原有双编译器和汇编优化）
   linux-x64:
     runs-on: ubuntu-latest
     steps:
@@ -37,38 +37,55 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Windows 构建：仅保留 x64 架构，编译器改为 Clang，保留汇编优化和核心功能
+  # Windows 构建：仅保留 x64 架构，使用 Chocolatey 安装兼容版 Clang
   windows-x64-clang:
     runs-on: windows-latest
     strategy:
       matrix:
-        # 仅保留 x64 相关配置，移除 x86/arm64；保留 darkmode 两种模式
         darkmode: [darkmode, '']
-        arch: [amd64]          # 仅 x64 架构
-        subsys: ["5.02"]       # x64 对应子系统版本
-        platform: ["x64"]      # 仅 x64 平台标识
+        arch: [amd64]
+        subsys: ["5.02"]
+        platform: ["x64"]
     steps:
       - uses: actions/checkout@v6
 
-      # 1. 配置 Clang 环境（Windows 下的 LLVM/Clang，替代原有 MSVC）
-      - name: Install LLVM/Clang (x64)
-        uses: KyleMayes/install-llvm-action@v1
-        with:
-          version: "17.0.6"    # 稳定版 Clang，兼容 Windows x64
-          arch: x64
+      # 修复：使用 Chocolatey 安装兼容 Windows 的 Clang 16.0.6（稳定版）
+      - name: Install Clang (x64) via Chocolatey
+        shell: powershell
+        run: |
+          # 确保 Chocolatey 已安装（若未预装则自动安装）
+          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing Chocolatey package manager"
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+            Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          }
 
-      # 2. 添加 msbuild 路径（确保构建脚本正常执行）
+          # 静默安装 Clang 16.0.6（兼容 Windows x64，自动配置 PATH）
+          Write-Host "Installing Clang 16.0.6 via Chocolatey"
+          choco install llvm --version=16.0.6 -y --no-progress
+
+          # 验证 Clang 安装成功
+          Write-Host "Verifying Clang installation"
+          clang --version
+          clang++ --version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Clang verification failed after Chocolatey installation"
+            exit 1
+          }
+
+      # 保留 msbuild 路径配置（确保构建脚本正常执行）
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@v2
 
-      # 3. 启用开发者命令提示符（适配 x64，支持 Clang 编译环境）
+      # 启用开发者命令提示符（适配 x64 + Clang 环境）
       - name: Enable Developer Command Prompt (x64)
         uses: ilammy/msvc-dev-cmd@v1.13.0
         with:
           arch: ${{ matrix.arch }}
-          toolset: clang        # 指定使用 Clang 工具集
+          toolset: clang  # 指定 Clang 工具集
 
-      # 4. 预准备依赖（保留 darkmode 逻辑，精简冗余架构判断）
+      # 预准备依赖（保留 darkmode 逻辑）
       - name: Pre-requirements
         shell: cmd
         run: |
@@ -85,7 +102,7 @@ jobs:
             )
           )
 
-      # 5. 编译 x64（使用 Clang 编译器，保留汇编优化，精简冗余配置）
+      # 编译 x64（使用 Chocolatey 安装的 Clang，保留汇编优化）
       - name: Compiling x64 with Clang
         shell: cmd
         run: |
@@ -101,7 +118,7 @@ jobs:
             set OUTDIR=%OUTDIR%-ndm
             set ZIP7_DARKMODE=0
           )
-          # 关键：指定 Clang 为默认编译器
+          # 指定 Chocolatey 安装的 Clang 为默认编译器
           set CC=clang.exe
           set CXX=clang++.exe
           set LFLAGS=/SUBSYSTEM:WINDOWS,%SUBSYS%
@@ -122,7 +139,7 @@ jobs:
           # 复制发布脚本供后续打包使用
           copy %WDIR%\.github\workflows\do-release.cmd %WDIR%\build\do-release.cmd
 
-      # 6. 测试 x64 产物（精简冗余架构判断，仅适配 x64）
+      # 测试 x64 产物
       - name: Test x64 Clang Binary
         shell: cmd
         run: |
@@ -132,14 +149,14 @@ jobs:
           set Z7_PATH=%OUTDIR%\7z.exe
           tclsh tests\7z-test.tcl -verbose tpsem
 
-      # 7. 上传 x64 构建产物（精简产物名称，仅标识 x64 和 darkmode）
+      # 上传 x64 构建产物
       - name: Upload x64 Clang Build Artifact
         uses: actions/upload-artifact@v6
         with:
           path: ${{ github.workspace }}\build\**\*
           name: binary-x64-${{ matrix.darkmode }}
 
-  # 发布任务：仅依赖 Windows x64 产物，精简冗余 artifact 匹配
+  # 发布任务：仅依赖 Windows x64 产物
   do-release:
     runs-on: windows-latest
     needs: windows-x64-clang
