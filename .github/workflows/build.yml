@@ -37,7 +37,7 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Windows 构建：禁用预编译头，解决 Clang-Cl PCH 兼容问题，保留汇编优化
+  # Windows 构建：屏蔽未使用函数警告，保留汇编优化和编译兼容性
   windows-x64-clang:
     runs-on: windows-latest
     strategy:
@@ -100,8 +100,8 @@ jobs:
             )
           )
 
-      # 编译 x64：禁用预编译头，解决 PCH 兼容问题，保留汇编优化
-      - name: Compiling x64 with clang-cl (PCH disabled, MSVC compatible)
+      # 编译 x64：屏蔽未使用函数警告，保留汇编优化和所有兼容配置
+      - name: Compiling x64 with clang-cl (unused function warning suppressed)
         shell: cmd
         run: |
           set WDIR=%cd%
@@ -116,14 +116,12 @@ jobs:
             set OUTDIR=%OUTDIR%-ndm
             set ZIP7_DARKMODE=0
           )
-          :: 核心修改1：使用 clang-cl.exe 兼容 MSVC 参数
+          :: 核心配置：使用 clang-cl.exe 兼容 MSVC 参数
           set CC=clang-cl.exe
           set CXX=clang-cl.exe
-          :: 核心修改2：更新 CFLAGS，添加 -Y- 禁用预编译头，解决 StdAfx.h 兼容问题
-          :: -Y-：禁用所有 MSVC 风格预编译头操作（-Yc/-Yu）
-          :: -Wno-unused-command-line-argument：屏蔽未使用参数警告
-          :: -fms-compatibility：增强 MSVC 兼容性
-          set CFLAGS=-Y- -Wno-unused-command-line-argument -fms-compatibility
+          :: 核心修改：新增 -Wno-unused-function 屏蔽未使用函数警告，解决本次报错
+          :: 保留原有所有兼容配置，确保无其他兼容性问题
+          set CFLAGS=-Y- -Wno-unused-command-line-argument -Wno-unused-function -fms-compatibility
           :: 额外配置：确保 clang-cl 识别 MSVC 环境变量
           set LLVM_SYMBOLIZER_PATH=%ProgramFiles%\LLVM\bin\llvm-symbolizer.exe
           set LFLAGS=/SUBSYSTEM:WINDOWS,%SUBSYS%
@@ -135,7 +133,7 @@ jobs:
           echo "Platform:    %PLATFORM%"
           echo "SUBSYS:      %SUBSYS%"
           echo "Compiler:    clang-cl.exe (MSVC compatible, LLVM 16.0.6)"
-          echo "Config:      PCH disabled (-Y-), unused parameter warnings suppressed"
+          echo "Config:      PCH disabled (-Y-), unused parameter/function warnings suppressed"
 
           @echo off
 
