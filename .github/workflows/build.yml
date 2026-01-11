@@ -40,7 +40,7 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Windows 构建任务（补充 UASM 安装，仅 x64）
+  # Windows 构建任务（修复 PowerShell 5.1 语法兼容，仅 x64）
   windows:
     runs-on: windows-latest
     strategy:
@@ -53,7 +53,7 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
-    # 新增：安装 UASM 汇编器（适配 Windows x64）
+    # 修复：PowerShell 5.1 兼容的 UASM 安装步骤
     - name: Install UASM (Universal Assembler) for Windows x64
       shell: powershell
       run: |
@@ -76,11 +76,15 @@ jobs:
           exit 1
         }
 
-        # 配置 PATH 确保可全局调用
+        # 配置 PATH 确保可全局调用（修复：移除 ?.，使用 PowerShell 5.1 兼容写法）
         $env:PATH += ";$env:TEMP"
-        $MINGW_BIN = (Get-Command "x86_64-w64-mingw32-gcc" -ErrorAction SilentlyContinue)?.DirectoryName
-        if ($MINGW_BIN) {
+        $MINGW_CMD = Get-Command "x86_64-w64-mingw32-gcc" -ErrorAction SilentlyContinue
+        if ($MINGW_CMD -ne $null) {
+          $MINGW_BIN = $MINGW_CMD.DirectoryName
           Copy-Item -Path $UASM_PATH -Destination $MINGW_BIN -Force
+          Write-Host "UASM copied to MinGW directory: $MINGW_BIN"
+        } else {
+          Write-Warning "MinGW GCC not found, UASM only added to TEMP PATH"
         }
 
         # 验证 UASM 安装
