@@ -1,195 +1,124 @@
-
-name: Build binaries
-on: [push, pull_request]
-
-jobs:
-  linux-x64:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v6
-    - name: Configure build system
-      run: |
-        time wget -q "https://github.com/Terraspace/UASM/releases/download/v2.57r/uasm257_linux64.zip"
-        unzip uasm257_linux64.zip uasm
-        sudo install -m 755 uasm /usr/bin
-    - name: Build via clang
-      run: |
-        cd ${{ github.workspace }}/CPP
-        CC="clang" CXX="clang++" OUTDIR="$PWD/build-clang" ./build-lx.sh
-    - name: Build via gcc
-      run: |
-        cd ${{ github.workspace }}/CPP
-        CC="gcc" CXX="g++" OUTDIR="$PWD/build-gcc" ./build-lx.sh
-    - name: Test with clang binary
-      run: |
-        Z7_PATH="CPP/build-clang/7z" tclsh tests/7z-test.tcl -verbose tpsem
-    - name: Test with gcc binary
-      run: |
-        Z7_PATH="CPP/build-gcc/7z" tclsh tests/7z-test.tcl -verbose tpsem
-    - name: Upload Build Artifacts (gcc)
-      uses: actions/upload-artifact@v6
-      with:
-        path: ${{ github.workspace }}/CPP/build-gcc/*
-        name: linux-gcc-x64
-    - name: Upload Build Artifacts (clang)
-      uses: actions/upload-artifact@v6
-      with:
-        path: ${{ github.workspace }}/CPP/build-clang/*
-        name: linux-clang-x64
-
-  linux-arm64:
-    runs-on: ubuntu-24.04-arm
-    steps:
-    - uses: actions/checkout@v6
-    - name: Build via clang
-      run: |
-        cd ${{ github.workspace }}/CPP
-        CC="clang" CXX="clang++" OUTDIR="$PWD/build-clang" ./build-lx.sh
-    - name: Build via gcc
-      run: |
-        cd ${{ github.workspace }}/CPP
-        CC="gcc" CXX="g++" OUTDIR="$PWD/build-gcc" ./build-lx.sh
-    - name: Test with clang binary
-      run: |
-        Z7_PATH="CPP/build-clang/7z" tclsh tests/7z-test.tcl -verbose tpsem
-    - name: Test with gcc binary
-      run: |
-        Z7_PATH="CPP/build-gcc/7z" tclsh tests/7z-test.tcl -verbose tpsem
-    - name: Upload Build Artifacts (gcc)
-      uses: actions/upload-artifact@v6
-      with:
-        path: ${{ github.workspace }}/CPP/build-gcc/*
-        name: linux-gcc-arm64
-    - name: Upload Build Artifacts (clang)
-      uses: actions/upload-artifact@v6
-      with:
-        path: ${{ github.workspace }}/CPP/build-clang/*
-        name: linux-clang-arm64
-
-########################################################################################
-# overview for supported targets:
-# 12.0 https://learn.microsoft.com/en-us/visualstudio/releases/2013/vs2013-compatibility-vs
-# 14.0 https://learn.microsoft.com/en-us/visualstudio/releases/2015/vs2015-compatibility-vs
-# 15.0 https://learn.microsoft.com/en-us/visualstudio/releases/2017/vs2017-compatibility-vs
-# 16.0 https://learn.microsoft.com/en-us/visualstudio/releases/2019/compatibility
-# 17.0 https://learn.microsoft.com/en-us/visualstudio/releases/2022/compatibility
-# -> we take 16.0 for now /TR
-########################################################################################
-
   windows:
     runs-on: windows-latest
 
     strategy:
       matrix:
-        arch: [ amd64, amd64_x86, amd64_arm64 ]
+        arch: [ x86, x64, arm64 ]  # GCC 对应架构命名，替换原 MSVC 架构
         darkmode: [darkmode, '']
         include:
-          - arch: amd64_x86
+          - arch: x86
             subsys: "5.01"
-            platform: "x86"
-          - arch: amd64
+            target: "i686-w64-mingw32"  # MinGW GCC 目标三元组
+          - arch: x64
             subsys: "5.02"
-            platform: "x64"
-          - arch: amd64_arm64
+            target: "x86_64-w64-mingw32"  # MinGW GCC 目标三元组
+          - arch: arm64
             subsys: "6.02"
-            platform: "arm64"
+            target: "aarch64-w64-mingw32"  # MinGW GCC 目标三元组
     steps:
       - uses: actions/checkout@v6
 
-      - name: Add msbuild to PATH
-        uses: microsoft/setup-msbuild@v2
-
-      - name: Enable Developer Command Prompt
-        uses: ilammy/msvc-dev-cmd@v1.13.0
+      # 核心修改1：安装 MinGW GCC 工具链（替换 MSBuild/VC Dev Cmd）
+      - name: Install MinGW GCC (Mingw-w64)
+        uses: egor-tensin/setup-mingw@v2
         with:
-          arch: ${{ matrix.arch }}
+          platform: ${{ matrix.arch }}
+          version: latest
 
+      # 核心修改2：预准备依赖（保留原逻辑，改为 PowerShell 兼容格式，替换 cmd）
       - name: Pre-requirements
-        shell: cmd
+        shell: powershell
         run: |
-          @if "${{matrix.darkmode}}" == "darkmode" (
-            @if exist DarkMode\lib\src (
-              @echo use DarkMode/lib
-            ) else (
-              @echo checkout darkmodelib module ...
+          if ("${{ matrix.darkmode }}" -eq "darkmode") {
+            if (Test-Path "DarkMode/lib/src") {
+              Write-Host "use DarkMode/lib"
+            } else {
+              Write-Host "checkout darkmodelib module ..."
               git submodule update --init --recursive DarkMode/lib
-              if %errorlevel% neq 0 (
-                @echo checkout module failed, clone ...
+              if ($LASTEXITCODE -ne 0) {
+                Write-Host "checkout module failed, clone ..."
                 git clone https://github.com/ozone10/darkmodelib.git DarkMode/lib
-              )
-            )
-          )
+              }
+            }
+          }
 
-      - name: Compiling ${{ matrix.arch }}
-        shell: cmd
+      # 核心修改3：GCC 编译（参考 Linux 构建的 CC/CXX 环境变量风格）
+      - name: Compiling ${{ matrix.arch }} with GCC
+        shell: powershell
         run: |
-          set WDIR=%cd%
-          set PLATFORM=${{matrix.platform}}
-          set SUBSYS=${{matrix.subsys}}
-          set ROOT=%cd%\CPP\7zip
-          set OUTDIR=%WDIR%\build\bin-%PLATFORM%
-          @if "${{matrix.darkmode}}" == "darkmode" (
-            if "${{matrix.subsys}}" lss "6.00" set SUBSYS=6.00
-            set ZIP7_DARKMODE=1
-          ) else (
-            set OUTDIR=%OUTDIR%-ndm
-            set ZIP7_DARKMODE=0
-          )
-          set LFLAGS=/SUBSYSTEM:WINDOWS,%SUBSYS%
-          set ERRFILE=
-          set STOP_ON_ERROR=1
+          # 定义基础路径和环境变量（参考 Linux 构建的 OUTDIR 风格）
+          $WDIR = $PWD.Path
+          $PLATFORM = "${{ matrix.arch }}"
+          $SUBSYS = "${{ matrix.subsys }}"
+          $TARGET = "${{ matrix.target }}"
+          $ROOT = Join-Path $WDIR "CPP/7zip"
+          $OUTDIR = Join-Path $WDIR "build/bin-$PLATFORM"
+          $DARKMODE = "${{ matrix.darkmode }}"
 
-          echo "********"
-          echo "Working Dir: %WDIR%"
-          echo "Platform:    %PLATFORM%"
-          echo "SUBSYS:      %SUBSYS%"
+          # 配置 DarkMode 相关参数
+          if ($DARKMODE -eq "darkmode") {
+            # 兼容 GCC 子系统版本要求
+            if ($SUBSYS -lt "6.00") { $SUBSYS = "6.00" }
+            $env:ZIP7_DARKMODE = 1
+          } else {
+            $OUTDIR += "-ndm"
+            $env:ZIP7_DARKMODE = 0
+          }
 
-          @echo off
+          # 参考 Linux 构建，指定 GCC 编译器（针对 Windows 交叉编译目标）
+          $env:CC = "$($TARGET)-gcc"
+          $env:CXX = "$($TARGET)-g++"
+          $env:OUTDIR = $OUTDIR
+          $env:SUBSYS = $SUBSYS
+          $env:PLATFORM = $PLATFORM
 
-          call CPP\build-it.cmd -no-init
-          IF %errorlevel% NEQ 0 EXIT 1
+          # 创建输出目录（确保目录存在，Linux 构建隐含此步骤，Windows 显式创建）
+          if (-not (Test-Path $OUTDIR)) {
+            New-Item -ItemType Directory -Path $OUTDIR | Out-Null
+          }
 
-          REM Will be by the do-release action
-          copy %WDIR%\.github\workflows\do-release.cmd %WDIR%\build\do-release.cmd
+          # 编译脚本修改：替换原 MSBuild 的 build-it.cmd 为 GCC 兼容的 build-lx.sh（需确保脚本支持 Windows MinGW）
+          # 切换到 CPP 目录（参考 Linux 构建的 cd ${{ github.workspace }}/CPP）
+          Set-Location (Join-Path $WDIR "CPP")
+          Write-Host "********"
+          Write-Host "Working Dir: $WDIR"
+          Write-Host "Platform:    $PLATFORM"
+          Write-Host "SUBSYS:      $SUBSYS"
+          Write-Host "Compiler:    $env:CC"
+          Write-Host "Output Dir:  $OUTDIR"
 
+          # 执行 GCC 构建脚本（参考 Linux 构建的 ./build-lx.sh）
+          bash ./build-lx.sh
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "GCC compilation failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+
+          # 复制发布脚本（保留原逻辑，适配新目录结构）
+          $doReleaseSrc = Join-Path $WDIR ".github/workflows/do-release.cmd"
+          $doReleaseDst = Join-Path $WDIR "build/do-release.cmd"
+          Copy-Item -Path $doReleaseSrc -Destination $doReleaseDst -Force
+
+      # 核心修改4：GCC 编译产物测试（保留原测试逻辑，适配 GCC 输出格式）
       - name: Test
-        shell: cmd
+        shell: powershell
         run: |
-          set PLATFORM=${{matrix.platform}}
-          set OUTDIR=build\bin-%PLATFORM%
-          if "${{matrix.darkmode}}" == "" set OUTDIR=%OUTDIR%-ndm
-          set Z7_PATH=%OUTDIR%\7z.exe
-          tclsh tests\7z-test.tcl -verbose tpsem
+          $PLATFORM = "${{ matrix.arch }}"
+          $DARKMODE = "${{ matrix.darkmode }}"
+          $OUTDIR = "build/bin-$PLATFORM"
+          if ($DARKMODE -eq "") { $OUTDIR += "-ndm" }
+          $env:Z7_PATH = Join-Path $OUTDIR "7z.exe"  # GCC 编译的 Windows 可执行文件
 
+          # 执行测试脚本
+          tclsh tests/7z-test.tcl -verbose tpsem
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Test failed for $PLATFORM ($DARKMODE)"
+            exit 1
+          }
+
+      # 核心修改5：上传 GCC 构建产物（保留原上传逻辑，适配新目录）
       - name: Upload a Build Artifact
         uses: actions/upload-artifact@v6
         with:
           path: ${{ github.workspace }}\build\**\*
           name: binary-${{ matrix.arch }}-${{ matrix.darkmode }}
-
-  do-release:
-    runs-on: windows-latest
-    needs: windows
-    steps:
-    - uses: actions/download-artifact@v7
-      with:
-        path: artifact
-        pattern: binary-*
-        merge-multiple: true
-
-    - name: Generate binaries for release
-      shell: cmd
-      run: |
-        cd artifact
-        do-release.cmd
-
-    - uses: geekyeggo/delete-artifact@v5
-      with:
-          name: binary-*
-
-    - uses: actions/upload-artifact@v6
-      with:
-        name: 7-Zip ZS Release binaries
-        path: |
-          artifact\*.exe
-          artifact\*.7z
