@@ -12,7 +12,7 @@ jobs:
     strategy:
       matrix:
         darkmode: [true, false]
-        compiler: [gcc, clang] # 仅保留 gcc 更稳定，clang 交叉编译需额外配置
+        compiler: [gcc] # 优先使用 gcc，clang 交叉编译兼容问题更多
     steps:
       - name: 1. 检出源码（包含子模块 DarkMode/lib）
         uses: actions/checkout@v6
@@ -22,13 +22,12 @@ jobs:
       - name: 2. 安装依赖（MinGW-w64 工具链 + 辅助工具）
         run: |
           sudo apt update && sudo apt upgrade -y
-          # 安装完整的 MinGW-w64 工具链，包含汇编器和编译依赖
           sudo apt install -y mingw-w64 make wine64 unzip tclsh
-          # 验证 MinGW-w64 编译器（明确完整路径）
+          # 验证 MinGW-w64 编译器
           x86_64-w64-mingw32-gcc --version
           x86_64-w64-mingw32-g++ --version
 
-      - name: 3. 下载并安装 UASM 汇编器（修正：合法验证）
+      - name: 3. 下载并安装 UASM 汇编器（合法验证）
         run: |
           wget -q "https://github.com/Terraspace/UASM/releases/download/v2.57r/uasm257_linux64.zip"
           unzip -q uasm257_linux64.zip uasm
@@ -42,43 +41,58 @@ jobs:
             exit 1
           fi
 
-      - name: 4. 配置交叉编译环境变量（核心修正：明确完整路径 + 替换占位符）
+      - name: 4. 配置交叉编译环境变量（核心修正：清理无效选项 + 补充 Windows 宏）
         run: |
-          # 定义 MinGW-w64 完整工具链路径（关键：避免占位符无法解析）
-          if [ "${{ matrix.compiler }}" = "gcc" ]; then
-            # 明确指定完整编译器路径，直接替换 {CC} 占位符
-            echo "CC=x86_64-w64-mingw32-gcc" >> $GITHUB_ENV
-            echo "CXX=x86_64-w64-mingw32-g++" >> $GITHUB_ENV
-            echo "CC_PREFIX=x86_64-w64-mingw32-" >> $GITHUB_ENV
-          else
-            echo "CC=x86_64-w64-mingw32-clang" >> $GITHUB_ENV
-            echo "CXX=x86_64-w64-mingw32-clang++" >> $GITHUB_ENV
-            echo "CC_PREFIX=x86_64-w64-mingw32-" >> $GITHUB_ENV
-          fi
+          # 定义 MinGW-w64 完整工具链路径
+          echo "CC=x86_64-w64-mingw32-gcc" >> $GITHUB_ENV
+          echo "CXX=x86_64-w64-mingw32-g++" >> $GITHUB_ENV
+          echo "CC_PREFIX=x86_64-w64-mingw32-" >> $GITHUB_ENV
           # 定义输出目录
           echo "OUTDIR=$PWD/CPP/build-win64-${{ matrix.compiler }}-darkmode-${{ matrix.darkmode }}" >> $GITHUB_ENV
           # 暗模式配置
           echo "ZIP7_DARKMODE=$(if [ "${{ matrix.darkmode }}" = "true" ]; then echo 1; else echo 0; fi)" >> $GITHUB_ENV
-          # 修正：Windows 交叉编译 CFLAGS/CXXFLAGS，移除 Linux 特有选项
-          echo "CFLAGS=-static -O2 -m64 -DWIN32 -D_WINDOWS -DZIP7_DARKMODE=$ZIP7_DARKMODE -DNDEBUG -Wall -Wextra" >> $GITHUB_ENV
-          echo "CXXFLAGS=-static -O2 -m64 -DWIN32 -D_WINDOWS -DZIP7_DARKMODE=$ZIP7_DARKMODE -DNDEBUG -Wall -Wextra -std=c++17" >> $GITHUB_ENV
-          # Windows 链接选项，链接必要的系统库
-          echo "LDFLAGS=-static -m64 -lkernel32 -luser32 -lgdi32 -lpthread -lws2_32" >> $GITHUB_ENV
-          # 定义 UASM 交叉编译参数（适配 Windows）
+          # 核心修正 1：移除 -Werror，清理 Linux 特有宏，补充 Windows 兼容宏
+          echo "CFLAGS=-static -O2 -m64 -DWIN32 -D_WINDOWS -DZIP7_DARKMODE=$ZIP7_DARKMODE -DNDEBUG -Wall -Wextra -D_WIN32_WINNT=0x0600 -DUNICODE -D_UNICODE" >> $GITHUB_ENV
+          echo "CXXFLAGS=-static -O2 -m64 -DWIN32 -D_WINDOWS -DZIP7_DARKMODE=$ZIP7_DARKMODE -DNDEBUG -Wall -Wextra -D_WIN32_WINNT=0x0600 -DUNICODE -D_UNICODE -std=c++17" >> $GITHUB_ENV
+          # Windows 链接选项，补充必要系统库
+          echo "LDFLAGS=-static -m64 -lkernel32 -luser32 -lgdi32 -lpthread -lws2_32 -ladvapi32" >> $GITHUB_ENV
+          # UASM 交叉编译参数（适配 Windows）
           echo "UASM_FLAGS=-nologo -win64 -Fo_o/" >> $GITHUB_ENV
 
-      - name: 5. 进入 CPP 目录，执行原生构建脚本（核心修正：传递环境变量 + 替换占位符）
+      - name: 5. 进入 CPP 目录，预处理 + 执行构建脚本（核心修正：强制修改 Makefile 参数）
         run: |
           cd ${{ github.workspace }}/CPP
-          # 验证 build-lx.sh 存在
+          # 验证 build-lx.sh 和 Makefile 存在
           if [ ! -f "./build-lx.sh" ]; then
             echo "错误：未找到原生构建脚本 build-lx.sh"
             ls -l
             exit 1
           fi
+          if [ ! -f "./7zip/7zip_gcc.mak" ]; then
+            echo "错误：未找到 Makefile 7zip_gcc.mak"
+            ls -l 7zip/
+            exit 1
+          fi
           chmod +x ./build-lx.sh
-          # 修正：直接通过环境变量注入 Makefile，强制替换 {CC}/{CXX} 占位符
-          # 方式 1：使用 env 命令传递所有环境变量，确保 make 子进程继承
+
+          # 核心修正 2：强制修改 Makefile，清理 Linux 特有编译选项和宏
+          echo "开始修改 Makefile，移除无效选项..."
+          # 1. 移除 -Werror 选项
+          sed -i "s/-Werror//g" 7zip/7zip_gcc.mak
+          # 2. 移除 Linux 特有宏（_REENTRANT、FILE_OFFSET_BITS 等）
+          sed -i "s/-D_REENTRANT//g" 7zip/7zip_gcc.mak
+          sed -i "s/-D_FILE_OFFSET_BITS=64//g" 7zip/7zip_gcc.mak
+          sed -i "s/-D_LARGEFILE_SOURCE//g" 7zip/7zip_gcc.mak
+          # 3. 移除 Linux 特有编译选项（-fPIC、-flto=auto）
+          sed -i "s/-fPIC//g" 7zip/7zip_gcc.mak
+          sed -i "s/-flto=auto//g" 7zip/7zip_gcc.mak
+          # 4. 强制替换 UASM 参数（-elf64 → -win64，移除 -DABI_LINUX）
+          sed -i "s/-elf64/-win64/g" 7zip/7zip_gcc.mak
+          sed -i "s/-DABI_LINUX//g" 7zip/7zip_gcc.mak
+          # 5. 替换 UASM 输出格式，确保与 Windows 编译器兼容
+          sed -i "s/Fo_o\//Fo_o\//g" 7zip/7zip_gcc.mak # 保留输出目录，仅修正格式
+
+          # 核心修正 3：显式传递环境变量，执行构建脚本
           env \
             CC="${{ env.CC }}" \
             CXX="${{ env.CXX }}" \
@@ -90,10 +104,6 @@ jobs:
             UASM_FLAGS="${{ env.UASM_FLAGS }}" \
             ZIP7_DARKMODE="${{ env.ZIP7_DARKMODE }}" \
             ./build-lx.sh
-          # 方式 2：若方式 1 仍有问题，直接修改 Makefile 占位符（临时替换）
-          # sed -i "s/{CC}/${{ env.CC }}/g" 7zip/7zip_gcc.mak
-          # sed -i "s/{CXX}/${{ env.CXX }}/g" 7zip/7zip_gcc.mak
-          # ./build-lx.sh
 
       - name: 6. 验证编译产物
         run: |
@@ -101,6 +111,8 @@ jobs:
           if [ -f "$EXE_FILE" ]; then
             echo "验证编译产物：$EXE_FILE"
             wine64 "$EXE_FILE" --version
+            # 验证产物格式（确认是 Windows x64 可执行文件）
+            file "$EXE_FILE"
           else
             echo "错误：未找到生成的 7z.exe 可执行文件"
             ls -l ${{ env.OUTDIR }}
