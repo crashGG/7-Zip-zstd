@@ -40,7 +40,7 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Windows 构建任务（使用有效 UASM 下载链接，仅 x64）
+  # Windows 构建任务（使用 Chocolatey 安装 UASM，仅 x64）
   windows:
     runs-on: windows-latest
     strategy:
@@ -53,60 +53,27 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
-    # 修复：使用有效 UASM 下载链接，兼容 PowerShell 5.1
-    - name: Install UASM (Universal Assembler) for Windows x64
+    # 核心修复：使用 Chocolatey 安装 UASM（替代无效的直接下载）
+    - name: Install UASM (Universal Assembler) for Windows x64 via Chocolatey
       shell: powershell
       run: |
-        # 有效 UASM Windows x64 下载链接（v2.56 稳定版，提供预编译包）
-        $UASM_URL = "https://github.com/UASMAssembler/UASM/releases/download/v2.56/uasm_v256_win64.zip"
-        $UASM_ZIP = "$env:TEMP/uasm_v256_win64.zip"
-        $UASM_EXE = "uasm.exe"
-
-        # 抑制下载进度条
-        $ProgressPreference = 'SilentlyContinue'
-
-        # 下载 UASM 并捕获错误
-        Write-Host "Downloading UASM from $UASM_URL"
-        try {
-          $response = Invoke-WebRequest -Uri $UASM_URL -OutFile $UASM_ZIP -UseBasicParsing -ErrorAction Stop
-        }
-        catch {
-          Write-Error "UASM download failed: $_"
-          Write-Error "Please check if the download URL is valid and accessible."
-          exit 1
+        # 1. 自动安装 Chocolatey（若未预装）
+        if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+          Write-Host "Installing Chocolatey package manager"
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
         }
 
-        # 验证下载结果
-        if (-not (Test-Path $UASM_ZIP) -or (Get-Item $UASM_ZIP).Length -eq 0) {
-          Write-Error "UASM zip file download failed or is empty: $UASM_ZIP"
-          exit 1
-        }
+        # 2. 静默安装 UASM（-y 自动确认，--no-progress 抑制进度条）
+        Write-Host "Installing UASM via Chocolatey"
+        choco install uasm -y --no-progress
 
-        # 解压并递归查找 uasm.exe
-        Write-Host "Extracting $UASM_EXE"
-        Expand-Archive -Path $UASM_ZIP -DestinationPath $env:TEMP -Force
-        $UASM_PATH = Get-ChildItem -Path $env:TEMP -Recurse -Filter $UASM_EXE | Select-Object -First 1 -ExpandProperty FullName
-        if (-not $UASM_PATH -or -not (Test-Path $UASM_PATH)) {
-          Write-Error "UASM extraction failed, $UASM_EXE not found in $env:TEMP"
-          exit 1
-        }
-
-        # 配置 PATH 确保全局可调用
-        $env:PATH += ";$(Split-Path $UASM_PATH -Parent)"
-        $MINGW_CMD = Get-Command "x86_64-w64-mingw32-gcc" -ErrorAction SilentlyContinue
-        if ($MINGW_CMD -ne $null) {
-          $MINGW_BIN = $MINGW_CMD.DirectoryName
-          Copy-Item -Path $UASM_PATH -Destination $MINGW_BIN -Force
-          Write-Host "UASM copied to MinGW directory: $MINGW_BIN"
-        } else {
-          Write-Warning "MinGW GCC not found, UASM only added to TEMP PATH"
-        }
-
-        # 验证 UASM 安装
+        # 3. 验证 UASM 安装与可用性
         Write-Host "Verifying UASM installation"
         uasm --version
         if ($LASTEXITCODE -ne 0) {
-          Write-Error "UASM verification failed"
+          Write-Error "UASM verification failed after Chocolatey installation"
           exit 1
         }
 
