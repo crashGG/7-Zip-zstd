@@ -1,11 +1,8 @@
-# 顶层配置：工作流名称
 name: Build binaries
-# 顶层配置：触发条件
 on: [push, pull_request]
 
-# 顶层配置：所有构建任务容器
 jobs:
-  # Linux 构建任务（仅保留 x64）
+  # 仅保留 Linux x64 构建（移除 arm64，保留原有双编译器和汇编优化）
   linux-x64:
     runs-on: ubuntu-latest
     steps:
@@ -40,160 +37,112 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Windows 构建任务（使用 Chocolatey 安装 UASM，仅 x64）
-  windows:
+  # Windows 构建：仅保留 x64 架构，编译器改为 Clang，保留汇编优化和核心功能
+  windows-x64-clang:
     runs-on: windows-latest
     strategy:
       matrix:
+        # 仅保留 x64 相关配置，移除 x86/arm64；保留 darkmode 两种模式
         darkmode: [darkmode, '']
-        arch: [x64]
-        subsys: ["5.02"]
-        platform: ["x64"]
-        target: ["x86_64-w64-mingw32"]
+        arch: [amd64]          # 仅 x64 架构
+        subsys: ["5.02"]       # x64 对应子系统版本
+        platform: ["x64"]      # 仅 x64 平台标识
     steps:
-    - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-    # 核心修复：使用 Chocolatey 安装 UASM（替代无效的直接下载）
-    - name: Install UASM (Universal Assembler) for Windows x64 via Chocolatey
-      shell: powershell
-      run: |
-        # 1. 自动安装 Chocolatey（若未预装）
-        if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-          Write-Host "Installing Chocolatey package manager"
-          Set-ExecutionPolicy Bypass -Scope Process -Force
-          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-          Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-        }
+      # 1. 配置 Clang 环境（Windows 下的 LLVM/Clang，替代原有 MSVC）
+      - name: Install LLVM/Clang (x64)
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          version: "17.0.6"    # 稳定版 Clang，兼容 Windows x64
+          arch: x64
 
-        # 2. 静默安装 UASM（-y 自动确认，--no-progress 抑制进度条）
-        Write-Host "Installing UASM via Chocolatey"
-        choco install uasm -y --no-progress
+      # 2. 添加 msbuild 路径（确保构建脚本正常执行）
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
 
-        # 3. 验证 UASM 安装与可用性
-        Write-Host "Verifying UASM installation"
-        uasm --version
-        if ($LASTEXITCODE -ne 0) {
-          Write-Error "UASM verification failed after Chocolatey installation"
-          exit 1
-        }
+      # 3. 启用开发者命令提示符（适配 x64，支持 Clang 编译环境）
+      - name: Enable Developer Command Prompt (x64)
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: ${{ matrix.arch }}
+          toolset: clang        # 指定使用 Clang 工具集
 
-    # 安装 MinGW GCC x64
-    - name: Install MinGW GCC (Mingw-w64 x64)
-      uses: egor-tensin/setup-mingw@v3
-      with:
-        platform: x64
+      # 4. 预准备依赖（保留 darkmode 逻辑，精简冗余架构判断）
+      - name: Pre-requirements
+        shell: cmd
+        run: |
+          @if "${{matrix.darkmode}}" == "darkmode" (
+            @if exist DarkMode\lib\src (
+              @echo use DarkMode/lib
+            ) else (
+              @echo checkout darkmodelib module ...
+              git submodule update --init --recursive DarkMode/lib
+              if %errorlevel% neq 0 (
+                @echo checkout module failed, clone ...
+                git clone https://github.com/ozone10/darkmodelib.git DarkMode/lib
+              )
+            )
+          )
 
-    # 预准备依赖
-    - name: Pre-requirements
-      shell: powershell
-      run: |
-        if ("${{ matrix.darkmode }}" -eq "darkmode") {
-          if (Test-Path "DarkMode/lib/src") {
-            Write-Host "use DarkMode/lib"
-          } else {
-            Write-Host "checkout darkmodelib module ..."
-            git submodule update --init --recursive DarkMode/lib
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host "checkout module failed, clone ..."
-              git clone https://github.com/ozone10/darkmodelib.git DarkMode/lib
-            }
-          }
-        }
+      # 5. 编译 x64（使用 Clang 编译器，保留汇编优化，精简冗余配置）
+      - name: Compiling x64 with Clang
+        shell: cmd
+        run: |
+          set WDIR=%cd%
+          set PLATFORM=${{matrix.platform}}
+          set SUBSYS=${{matrix.subsys}}
+          set ROOT=%cd%\CPP\7zip
+          set OUTDIR=%WDIR%\build\bin-%PLATFORM%
+          @if "${{matrix.darkmode}}" == "darkmode" (
+            if "${{matrix.subsys}}" lss "6.00" set SUBSYS=6.00
+            set ZIP7_DARKMODE=1
+          ) else (
+            set OUTDIR=%OUTDIR%-ndm
+            set ZIP7_DARKMODE=0
+          )
+          # 关键：指定 Clang 为默认编译器
+          set CC=clang.exe
+          set CXX=clang++.exe
+          set LFLAGS=/SUBSYSTEM:WINDOWS,%SUBSYS%
+          set ERRFILE=
+          set STOP_ON_ERROR=1
 
-    # GCC 编译 x64
-    - name: Compiling x64 with GCC
-      shell: powershell
-      run: |
-        $TARGET = "${{ matrix.target }}"
-        $CC_PATH = "$($TARGET)-gcc"
-        $CXX_PATH = "$($TARGET)-g++"
-        
-        try {
-          & $CC_PATH --version
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "GCC 编译器 $CC_PATH 不存在，安装失败"
-            exit 1
-          }
-          & $CXX_PATH --version
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "G++ 编译器 $CXX_PATH 不存在，安装失败"
-            exit 1
-          }
-        }
-        catch {
-          Write-Error "无法执行编译器 $CC_PATH，MinGW 安装不完整"
-          exit 1
-        }
+          echo "********"
+          echo "Working Dir: %WDIR%"
+          echo "Platform:    %PLATFORM%"
+          echo "SUBSYS:      %SUBSYS%"
+          echo "Compiler:    Clang (clang.exe / clang++.exe)"
 
-        $WDIR = $PWD.Path
-        $PLATFORM = "${{ matrix.platform }}"
-        $SUBSYS = "${{ matrix.subsys }}"
-        $OUTDIR = Join-Path $WDIR "build/bin-$PLATFORM"
-        $DARKMODE = "${{ matrix.darkmode }}"
+          @echo off
 
-        if ($DARKMODE -eq "darkmode") {
-          if ($SUBSYS -lt "6.00") { $SUBSYS = "6.00" }
-          $env:ZIP7_DARKMODE = 1
-        } else {
-          $OUTDIR += "-ndm"
-          $env:ZIP7_DARKMODE = 0
-        }
+          call CPP\build-it.cmd -no-init
+          IF %errorlevel% NEQ 0 EXIT 1
 
-        $env:CC = "$($TARGET)-gcc"
-        $env:CXX = "$($TARGET)-g++"
-        $env:OUTDIR = $OUTDIR
-        $env:SUBSYS = $SUBSYS
-        $env:PLATFORM = $PLATFORM
+          # 复制发布脚本供后续打包使用
+          copy %WDIR%\.github\workflows\do-release.cmd %WDIR%\build\do-release.cmd
 
-        if (-not (Test-Path $OUTDIR)) {
-          New-Item -ItemType Directory -Path $OUTDIR | Out-Null
-        }
+      # 6. 测试 x64 产物（精简冗余架构判断，仅适配 x64）
+      - name: Test x64 Clang Binary
+        shell: cmd
+        run: |
+          set PLATFORM=${{matrix.platform}}
+          set OUTDIR=build\bin-%PLATFORM%
+          if "${{matrix.darkmode}}" == "" set OUTDIR=%OUTDIR%-ndm
+          set Z7_PATH=%OUTDIR%\7z.exe
+          tclsh tests\7z-test.tcl -verbose tpsem
 
-        Set-Location (Join-Path $WDIR "CPP")
-        Write-Host "********"
-        Write-Host "Working Dir: $WDIR"
-        Write-Host "Platform:    $PLATFORM"
-        Write-Host "SUBSYS:      $SUBSYS"
-        Write-Host "Compiler:    $env:CC"
-        Write-Host "Output Dir:  $OUTDIR"
+      # 7. 上传 x64 构建产物（精简产物名称，仅标识 x64 和 darkmode）
+      - name: Upload x64 Clang Build Artifact
+        uses: actions/upload-artifact@v6
+        with:
+          path: ${{ github.workspace }}\build\**\*
+          name: binary-x64-${{ matrix.darkmode }}
 
-        bash ./build-lx.sh
-        if ($LASTEXITCODE -ne 0) {
-          Write-Error "GCC compilation failed with exit code $LASTEXITCODE"
-          exit 1
-        }
-
-        $doReleaseSrc = Join-Path $WDIR ".github/workflows/do-release.cmd"
-        $doReleaseDst = Join-Path $WDIR "build/do-release.cmd"
-        Copy-Item -Path $doReleaseSrc -Destination $doReleaseDst -Force
-
-    # 测试 x64 产物
-    - name: Test x64 binary
-      shell: powershell
-      run: |
-        $PLATFORM = "${{ matrix.platform }}"
-        $DARKMODE = "${{ matrix.darkmode }}"
-        $OUTDIR = "build/bin-$PLATFORM"
-        if ($DARKMODE -eq "") { $OUTDIR += "-ndm" }
-        $env:Z7_PATH = Join-Path $OUTDIR "7z.exe"
-
-        tclsh tests/7z-test.tcl -verbose tpsem
-        if ($LASTEXITCODE -ne 0) {
-          Write-Error "Test failed for x64 ($DARKMODE)"
-          exit 1
-        }
-
-    # 上传 x64 产物
-    - name: Upload x64 Build Artifact
-      uses: actions/upload-artifact@v6
-      with:
-        path: ${{ github.workspace }}\build\**\*
-        name: binary-x64-${{ matrix.darkmode }}
-
-  # 发布任务
+  # 发布任务：仅依赖 Windows x64 产物，精简冗余 artifact 匹配
   do-release:
     runs-on: windows-latest
-    needs: windows
+    needs: windows-x64-clang
     steps:
     - uses: actions/download-artifact@v7
       with:
@@ -213,7 +162,7 @@ jobs:
 
     - uses: actions/upload-artifact@v6
       with:
-        name: 7-Zip ZS Release binaries (x64)
+        name: 7-Zip ZS Release binaries (x64 Clang)
         path: |
           artifact\*.exe
           artifact\*.7z
