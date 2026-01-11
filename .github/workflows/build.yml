@@ -1,6 +1,78 @@
+# 顶层配置：工作流名称（必需，可自定义）
+name: Build binaries
+# 顶层配置：触发条件（必需，定义工作流何时运行）
+on: [push, pull_request]
+
+# 顶层配置：所有构建任务的容器（必需，不可缺失）
+jobs:
+  # Linux x64 构建任务（保留你原有的逻辑）
+  linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - name: Configure build system
+      run: |
+        time wget -q "https://github.com/Terraspace/UASM/releases/download/v2.57r/uasm257_linux64.zip"
+        unzip uasm257_linux64.zip uasm
+        sudo install -m 755 uasm /usr/bin
+    - name: Build via clang
+      run: |
+        cd ${{ github.workspace }}/CPP
+        CC="clang" CXX="clang++" OUTDIR="$PWD/build-clang" ./build-lx.sh
+    - name: Build via gcc
+      run: |
+        cd ${{ github.workspace }}/CPP
+        CC="gcc" CXX="g++" OUTDIR="$PWD/build-gcc" ./build-lx.sh
+    - name: Test with clang binary
+      run: |
+        Z7_PATH="CPP/build-clang/7z" tclsh tests/7z-test.tcl -verbose tpsem
+    - name: Test with gcc binary
+      run: |
+        Z7_PATH="CPP/build-gcc/7z" tclsh tests/7z-test.tcl -verbose tpsem
+    - name: Upload Build Artifacts (gcc)
+      uses: actions/upload-artifact@v6
+      with:
+        path: ${{ github.workspace }}/CPP/build-gcc/*
+        name: linux-gcc-x64
+    - name: Upload Build Artifacts (clang)
+      uses: actions/upload-artifact@v6
+      with:
+        path: ${{ github.workspace }}/CPP/build-clang/*
+        name: linux-clang-x64
+
+  # Linux arm64 构建任务（保留你原有的逻辑）
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - uses: actions/checkout@v6
+    - name: Build via clang
+      run: |
+        cd ${{ github.workspace }}/CPP
+        CC="clang" CXX="clang++" OUTDIR="$PWD/build-clang" ./build-lx.sh
+    - name: Build via gcc
+      run: |
+        cd ${{ github.workspace }}/CPP
+        CC="gcc" CXX="g++" OUTDIR="$PWD/build-gcc" ./build-lx.sh
+    - name: Test with clang binary
+      run: |
+        Z7_PATH="CPP/build-clang/7z" tclsh tests/7z-test.tcl -verbose tpsem
+    - name: Test with gcc binary
+      run: |
+        Z7_PATH="CPP/build-gcc/7z" tclsh tests/7z-test.tcl -verbose tpsem
+    - name: Upload Build Artifacts (gcc)
+      uses: actions/upload-artifact@v6
+      with:
+        path: ${{ github.workspace }}/CPP/build-gcc/*
+        name: linux-gcc-arm64
+    - name: Upload Build Artifacts (clang)
+      uses: actions/upload-artifact@v6
+      with:
+        path: ${{ github.workspace }}/CPP/build-clang/*
+        name: linux-clang-arm64
+
+  # Windows GCC 构建任务（已修改为 MinGW GCC，嵌套在 jobs 之下）
   windows:
     runs-on: windows-latest
-
     strategy:
       matrix:
         arch: [ x86, x64, arm64 ]  # GCC 对应架构命名，替换原 MSVC 架构
@@ -8,24 +80,27 @@
         include:
           - arch: x86
             subsys: "5.01"
-            target: "i686-w64-mingw32"  # MinGW GCC 目标三元组
+            platform: "x86"
+            target: "i686-w64-mingw32"
           - arch: x64
             subsys: "5.02"
-            target: "x86_64-w64-mingw32"  # MinGW GCC 目标三元组
+            platform: "x64"
+            target: "x86_64-w64-mingw32"
           - arch: arm64
             subsys: "6.02"
-            target: "aarch64-w64-mingw32"  # MinGW GCC 目标三元组
+            platform: "arm64"
+            target: "aarch64-w64-mingw32"
     steps:
       - uses: actions/checkout@v6
 
-      # 核心修改1：安装 MinGW GCC 工具链（替换 MSBuild/VC Dev Cmd）
+      # 安装 MinGW GCC 工具链（替换 MSBuild/VC Dev Cmd）
       - name: Install MinGW GCC (Mingw-w64)
         uses: egor-tensin/setup-mingw@v2
         with:
           platform: ${{ matrix.arch }}
           version: latest
 
-      # 核心修改2：预准备依赖（保留原逻辑，改为 PowerShell 兼容格式，替换 cmd）
+      # 预准备依赖（改为 PowerShell 兼容格式）
       - name: Pre-requirements
         shell: powershell
         run: |
@@ -42,11 +117,11 @@
             }
           }
 
-      # 核心修改3：GCC 编译（参考 Linux 构建的 CC/CXX 环境变量风格）
+      # GCC 编译（参考 Linux 构建的 CC/CXX 环境变量风格）
       - name: Compiling ${{ matrix.arch }} with GCC
         shell: powershell
         run: |
-          # 定义基础路径和环境变量（参考 Linux 构建的 OUTDIR 风格）
+          # 定义基础路径和环境变量
           $WDIR = $PWD.Path
           $PLATFORM = "${{ matrix.arch }}"
           $SUBSYS = "${{ matrix.subsys }}"
@@ -57,7 +132,6 @@
 
           # 配置 DarkMode 相关参数
           if ($DARKMODE -eq "darkmode") {
-            # 兼容 GCC 子系统版本要求
             if ($SUBSYS -lt "6.00") { $SUBSYS = "6.00" }
             $env:ZIP7_DARKMODE = 1
           } else {
@@ -65,20 +139,19 @@
             $env:ZIP7_DARKMODE = 0
           }
 
-          # 参考 Linux 构建，指定 GCC 编译器（针对 Windows 交叉编译目标）
+          # 指定 GCC 编译器（针对 Windows 交叉编译目标）
           $env:CC = "$($TARGET)-gcc"
           $env:CXX = "$($TARGET)-g++"
           $env:OUTDIR = $OUTDIR
           $env:SUBSYS = $SUBSYS
           $env:PLATFORM = $PLATFORM
 
-          # 创建输出目录（确保目录存在，Linux 构建隐含此步骤，Windows 显式创建）
+          # 创建输出目录
           if (-not (Test-Path $OUTDIR)) {
             New-Item -ItemType Directory -Path $OUTDIR | Out-Null
           }
 
-          # 编译脚本修改：替换原 MSBuild 的 build-it.cmd 为 GCC 兼容的 build-lx.sh（需确保脚本支持 Windows MinGW）
-          # 切换到 CPP 目录（参考 Linux 构建的 cd ${{ github.workspace }}/CPP）
+          # 切换到 CPP 目录执行构建脚本
           Set-Location (Join-Path $WDIR "CPP")
           Write-Host "********"
           Write-Host "Working Dir: $WDIR"
@@ -87,19 +160,19 @@
           Write-Host "Compiler:    $env:CC"
           Write-Host "Output Dir:  $OUTDIR"
 
-          # 执行 GCC 构建脚本（参考 Linux 构建的 ./build-lx.sh）
+          # 执行 GCC 构建脚本
           bash ./build-lx.sh
           if ($LASTEXITCODE -ne 0) {
             Write-Error "GCC compilation failed with exit code $LASTEXITCODE"
             exit 1
           }
 
-          # 复制发布脚本（保留原逻辑，适配新目录结构）
+          # 复制发布脚本
           $doReleaseSrc = Join-Path $WDIR ".github/workflows/do-release.cmd"
           $doReleaseDst = Join-Path $WDIR "build/do-release.cmd"
           Copy-Item -Path $doReleaseSrc -Destination $doReleaseDst -Force
 
-      # 核心修改4：GCC 编译产物测试（保留原测试逻辑，适配 GCC 输出格式）
+      # 测试 GCC 编译产物
       - name: Test
         shell: powershell
         run: |
@@ -107,7 +180,7 @@
           $DARKMODE = "${{ matrix.darkmode }}"
           $OUTDIR = "build/bin-$PLATFORM"
           if ($DARKMODE -eq "") { $OUTDIR += "-ndm" }
-          $env:Z7_PATH = Join-Path $OUTDIR "7z.exe"  # GCC 编译的 Windows 可执行文件
+          $env:Z7_PATH = Join-Path $OUTDIR "7z.exe"
 
           # 执行测试脚本
           tclsh tests/7z-test.tcl -verbose tpsem
@@ -116,9 +189,37 @@
             exit 1
           }
 
-      # 核心修改5：上传 GCC 构建产物（保留原上传逻辑，适配新目录）
+      # 上传 GCC 构建产物
       - name: Upload a Build Artifact
         uses: actions/upload-artifact@v6
         with:
           path: ${{ github.workspace }}\build\**\*
           name: binary-${{ matrix.arch }}-${{ matrix.darkmode }}
+
+  # 发布任务（保留你原有的逻辑，嵌套在 jobs 之下）
+  do-release:
+    runs-on: windows-latest
+    needs: windows
+    steps:
+    - uses: actions/download-artifact@v7
+      with:
+        path: artifact
+        pattern: binary-*
+        merge-multiple: true
+
+    - name: Generate binaries for release
+      shell: cmd
+      run: |
+        cd artifact
+        do-release.cmd
+
+    - uses: geekyeggo/delete-artifact@v5
+      with:
+          name: binary-*
+
+    - uses: actions/upload-artifact@v6
+      with:
+        name: 7-Zip ZS Release binaries
+        path: |
+          artifact\*.exe
+          artifact\*.7z
