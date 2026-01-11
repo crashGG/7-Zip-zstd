@@ -40,7 +40,7 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Windows 构建任务（修复 Invoke-WebRequest 参数，仅 x64）
+  # Windows 构建任务（使用有效 UASM 下载链接，仅 x64）
   windows:
     runs-on: windows-latest
     strategy:
@@ -53,40 +53,46 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
-    # 修复：PowerShell 5.1 兼容的 UASM 安装步骤（移除无效参数）
+    # 修复：使用有效 UASM 下载链接，兼容 PowerShell 5.1
     - name: Install UASM (Universal Assembler) for Windows x64
       shell: powershell
       run: |
-        $UASM_URL = "https://github.com/Terraspace/UASM/releases/download/v2.57r/uasm257_win64.zip"
-        $UASM_ZIP = "$env:TEMP/uasm257_win64.zip"
+        # 有效 UASM Windows x64 下载链接（v2.56 稳定版，提供预编译包）
+        $UASM_URL = "https://github.com/UASMAssembler/UASM/releases/download/v2.56/uasm_v256_win64.zip"
+        $UASM_ZIP = "$env:TEMP/uasm_v256_win64.zip"
         $UASM_EXE = "uasm.exe"
 
-        # 抑制下载进度条，实现静默下载效果（兼容 PowerShell 5.1）
+        # 抑制下载进度条
         $ProgressPreference = 'SilentlyContinue'
 
-        # 下载 UASM（移除无效的 -SilentlyContinue，保留 -UseBasicParsing）
+        # 下载 UASM 并捕获错误
         Write-Host "Downloading UASM from $UASM_URL"
-        Invoke-WebRequest -Uri $UASM_URL -OutFile $UASM_ZIP -UseBasicParsing
+        try {
+          $response = Invoke-WebRequest -Uri $UASM_URL -OutFile $UASM_ZIP -UseBasicParsing -ErrorAction Stop
+        }
+        catch {
+          Write-Error "UASM download failed: $_"
+          Write-Error "Please check if the download URL is valid and accessible."
+          exit 1
+        }
 
-        # 验证下载结果，避免空文件
+        # 验证下载结果
         if (-not (Test-Path $UASM_ZIP) -or (Get-Item $UASM_ZIP).Length -eq 0) {
           Write-Error "UASM zip file download failed or is empty: $UASM_ZIP"
           exit 1
         }
 
-        # 解压 uasm.exe
+        # 解压并递归查找 uasm.exe
         Write-Host "Extracting $UASM_EXE"
         Expand-Archive -Path $UASM_ZIP -DestinationPath $env:TEMP -Force
-
-        # 验证解压结果
-        $UASM_PATH = Join-Path $env:TEMP $UASM_EXE
-        if (-not (Test-Path $UASM_PATH)) {
-          Write-Error "UASM extraction failed, $UASM_EXE not found"
+        $UASM_PATH = Get-ChildItem -Path $env:TEMP -Recurse -Filter $UASM_EXE | Select-Object -First 1 -ExpandProperty FullName
+        if (-not $UASM_PATH -or -not (Test-Path $UASM_PATH)) {
+          Write-Error "UASM extraction failed, $UASM_EXE not found in $env:TEMP"
           exit 1
         }
 
-        # 配置 PATH 确保可全局调用
-        $env:PATH += ";$env:TEMP"
+        # 配置 PATH 确保全局可调用
+        $env:PATH += ";$(Split-Path $UASM_PATH -Parent)"
         $MINGW_CMD = Get-Command "x86_64-w64-mingw32-gcc" -ErrorAction SilentlyContinue
         if ($MINGW_CMD -ne $null) {
           $MINGW_BIN = $MINGW_CMD.DirectoryName
