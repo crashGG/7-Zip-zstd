@@ -37,7 +37,7 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Windows 构建：仅保留 x64 架构，使用 Chocolatey 安装兼容版 Clang
+  # Windows 构建：仅保留 x64 架构，修复 Clang 工具集配置问题
   windows-x64-clang:
     runs-on: windows-latest
     strategy:
@@ -49,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # 修复：使用 Chocolatey 安装兼容 Windows 的 Clang 16.0.6（稳定版）
+      # 使用 Chocolatey 安装兼容 Windows 的 Clang 16.0.6（稳定版）
       - name: Install Clang (x64) via Chocolatey
         shell: powershell
         run: |
@@ -78,12 +78,11 @@ jobs:
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@v2
 
-      # 启用开发者命令提示符（适配 x64 + Clang 环境）
+      # 修复：移除 toolset: clang 无效参数，仅配置 x64 架构（满足 Windows 构建环境即可）
       - name: Enable Developer Command Prompt (x64)
         uses: ilammy/msvc-dev-cmd@v1.13.0
         with:
           arch: ${{ matrix.arch }}
-          toolset: clang  # 指定 Clang 工具集
 
       # 预准备依赖（保留 darkmode 逻辑）
       - name: Pre-requirements
@@ -102,7 +101,7 @@ jobs:
             )
           )
 
-      # 编译 x64（使用 Chocolatey 安装的 Clang，保留汇编优化）
+      # 编译 x64（使用 Chocolatey 安装的独立 Clang，保留汇编优化）
       - name: Compiling x64 with Clang
         shell: cmd
         run: |
@@ -118,7 +117,7 @@ jobs:
             set OUTDIR=%OUTDIR%-ndm
             set ZIP7_DARKMODE=0
           )
-          # 指定 Chocolatey 安装的 Clang 为默认编译器
+          # 指定 Chocolatey 安装的独立 Clang 为默认编译器（全局可调用）
           set CC=clang.exe
           set CXX=clang++.exe
           set LFLAGS=/SUBSYSTEM:WINDOWS,%SUBSYS%
@@ -129,7 +128,7 @@ jobs:
           echo "Working Dir: %WDIR%"
           echo "Platform:    %PLATFORM%"
           echo "SUBSYS:      %SUBSYS%"
-          echo "Compiler:    Clang (clang.exe / clang++.exe)"
+          echo "Compiler:    Clang 16.0.6 (standalone, installed via Chocolatey)"
 
           @echo off
 
@@ -179,7 +178,7 @@ jobs:
 
     - uses: actions/upload-artifact@v6
       with:
-        name: 7-Zip ZS Release binaries (x64 Clang)
+        name: 7-Zip ZS Release binaries (x64 Clang 16.0.6)
         path: |
           artifact\*.exe
           artifact\*.7z
