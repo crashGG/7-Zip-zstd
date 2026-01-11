@@ -40,7 +40,7 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Windows 构建任务（修复 PowerShell 5.1 语法兼容，仅 x64）
+  # Windows 构建任务（修复 Invoke-WebRequest 参数，仅 x64）
   windows:
     runs-on: windows-latest
     strategy:
@@ -53,7 +53,7 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
-    # 修复：PowerShell 5.1 兼容的 UASM 安装步骤
+    # 修复：PowerShell 5.1 兼容的 UASM 安装步骤（移除无效参数）
     - name: Install UASM (Universal Assembler) for Windows x64
       shell: powershell
       run: |
@@ -61,9 +61,18 @@ jobs:
         $UASM_ZIP = "$env:TEMP/uasm257_win64.zip"
         $UASM_EXE = "uasm.exe"
 
-        # 下载 UASM
+        # 抑制下载进度条，实现静默下载效果（兼容 PowerShell 5.1）
+        $ProgressPreference = 'SilentlyContinue'
+
+        # 下载 UASM（移除无效的 -SilentlyContinue，保留 -UseBasicParsing）
         Write-Host "Downloading UASM from $UASM_URL"
-        Invoke-WebRequest -Uri $UASM_URL -OutFile $UASM_ZIP -UseBasicParsing -SilentlyContinue
+        Invoke-WebRequest -Uri $UASM_URL -OutFile $UASM_ZIP -UseBasicParsing
+
+        # 验证下载结果，避免空文件
+        if (-not (Test-Path $UASM_ZIP) -or (Get-Item $UASM_ZIP).Length -eq 0) {
+          Write-Error "UASM zip file download failed or is empty: $UASM_ZIP"
+          exit 1
+        }
 
         # 解压 uasm.exe
         Write-Host "Extracting $UASM_EXE"
@@ -76,7 +85,7 @@ jobs:
           exit 1
         }
 
-        # 配置 PATH 确保可全局调用（修复：移除 ?.，使用 PowerShell 5.1 兼容写法）
+        # 配置 PATH 确保可全局调用
         $env:PATH += ";$env:TEMP"
         $MINGW_CMD = Get-Command "x86_64-w64-mingw32-gcc" -ErrorAction SilentlyContinue
         if ($MINGW_CMD -ne $null) {
