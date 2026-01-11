@@ -37,7 +37,7 @@ jobs:
         path: ${{ github.workspace }}/CPP/build-clang/*
         name: linux-clang-x64
 
-  # Windows 构建：使用 clang-cl.exe 兼容 MSVC 参数，保留汇编优化
+  # Windows 构建：使用 clang-cl.exe 屏蔽无效警告，兼容 MSVC 参数，保留汇编优化
   windows-x64-clang:
     runs-on: windows-latest
     strategy:
@@ -100,8 +100,8 @@ jobs:
             )
           )
 
-      # 编译 x64：使用 clang-cl.exe 兼容 MSVC 参数，保留汇编优化
-      - name: Compiling x64 with clang-cl (MSVC compatible)
+      # 编译 x64：屏蔽 Clang 无效参数警告，保留汇编优化
+      - name: Compiling x64 with clang-cl (MSVC compatible, warning suppressed)
         shell: cmd
         run: |
           set WDIR=%cd%
@@ -116,9 +116,13 @@ jobs:
             set OUTDIR=%OUTDIR%-ndm
             set ZIP7_DARKMODE=0
           )
-          :: 核心修改：使用 clang-cl.exe 替代 clang.exe，兼容 MSVC 专属参数
+          :: 核心修改1：使用 clang-cl.exe 替代 clang.exe，兼容 MSVC 专属参数
           set CC=clang-cl.exe
           set CXX=clang-cl.exe
+          :: 核心修改2：添加 CFLAGS 环境变量，屏蔽「未使用命令行参数」警告，避免被 -Werror 升级为错误
+          :: -Wno-unused-command-line-argument：屏蔽未使用参数警告
+          :: -fms-compatibility：增强 MSVC 兼容性，减少额外警告
+          set CFLAGS=-Wno-unused-command-line-argument -fms-compatibility
           :: 额外配置：确保 clang-cl 识别 MSVC 环境变量（头文件、库文件路径）
           set LLVM_SYMBOLIZER_PATH=%ProgramFiles%\LLVM\bin\llvm-symbolizer.exe
           set LFLAGS=/SUBSYSTEM:WINDOWS,%SUBSYS%
@@ -130,6 +134,7 @@ jobs:
           echo "Platform:    %PLATFORM%"
           echo "SUBSYS:      %SUBSYS%"
           echo "Compiler:    clang-cl.exe (MSVC compatible, LLVM 16.0.6)"
+          echo "Warning Config: -Wno-unused-command-line-argument (suppress unused parameter warnings)"
 
           @echo off
 
